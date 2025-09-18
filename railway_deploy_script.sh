@@ -357,16 +357,46 @@ deploy_to_railway() {
     # Set environment variables
     print_info "Step 3: Setting environment variables..."
     
-    railway variables set ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
-    railway variables set GITHUB_WEBHOOK_SECRET="$GITHUB_WEBHOOK_SECRET"
-    
-    if [ -n "$ALLOWED_REPOS" ]; then
-        railway variables set ALLOWED_REPOS="$ALLOWED_REPOS"
+    # Check Railway CLI version and use appropriate command
+    if railway variables --help 2>&1 | grep -q "set"; then
+        # Older CLI version
+        railway variables set ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+        railway variables set GITHUB_WEBHOOK_SECRET="$GITHUB_WEBHOOK_SECRET"
+        if [ -n "$ALLOWED_REPOS" ]; then
+            railway variables set ALLOWED_REPOS="$ALLOWED_REPOS"
+        fi
+        railway variables set FLASK_DEBUG="false"
+    else
+        # Newer CLI version - use environment variable syntax
+        print_info "Using newer Railway CLI syntax..."
+
+        # Method 1: Try the newer syntax
+        if ! railway variables ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" 2>/dev/null; then
+            # Method 2: Set variables through Railway web interface
+            print_warning "Unable to set variables via CLI. Please set them manually in Railway dashboard:"
+            echo ""
+            echo "🔗 Go to: https://railway.app/project/1bcf1c1e-5a47-4e0a-9464-9575c395875d"
+            echo ""
+            echo "📋 Set these environment variables:"
+            echo "   ANTHROPIC_API_KEY = $ANTHROPIC_API_KEY"
+            echo "   GITHUB_WEBHOOK_SECRET = $GITHUB_WEBHOOK_SECRET"
+            if [ -n "$ALLOWED_REPOS" ]; then
+                echo "   ALLOWED_REPOS = $ALLOWED_REPOS"
+            fi
+            echo "   FLASK_DEBUG = false"
+            echo ""
+            read -p "Press Enter after setting the variables in Railway dashboard..."
+        else
+            # If first variable worked, set the rest
+            railway variables GITHUB_WEBHOOK_SECRET="$GITHUB_WEBHOOK_SECRET"
+            if [ -n "$ALLOWED_REPOS" ]; then
+                railway variables ALLOWED_REPOS="$ALLOWED_REPOS"
+            fi
+            railway variables FLASK_DEBUG="false"
+        fi
     fi
-    
-    railway variables set FLASK_DEBUG="false"
-    
-    print_status "Environment variables set"
+
+    print_status "Environment variables configured"
     
     # Deploy the application
     print_info "Step 4: Deploying application..."
