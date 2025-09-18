@@ -1,10 +1,11 @@
 #!/bin/bash
 
-# Start script for Railway deployment
-echo "🚀 Starting AI Code Reviewer..."
+# Install dependencies if not already installed
+pip install --no-cache-dir -r requirements.txt
 
-# Set default port if not provided
-export PORT=${PORT:-5000}
+# Check if gunicorn is available, if not use Flask directly
 
-# Start the application with gunicorn
-exec gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 app:app
+echo "Gunicorn not found, starting with Flask development server..."
+
+exec python app.py
+fi
