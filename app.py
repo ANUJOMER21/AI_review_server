@@ -9,7 +9,9 @@ import hmac
 import hashlib
 from ai_reviewer import EnhancedAIReviewer
 from dotenv import load_dotenv
+
 load_dotenv()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,6 +55,28 @@ def async_route(f):
         return asyncio.run(f(*args, **kwargs))
 
     return wrapper
+
+
+def serialize_object(obj):
+    """Safely serialize an object to dictionary"""
+    if hasattr(obj, '__dict__'):
+        return vars(obj)
+    elif isinstance(obj, dict):
+        return obj
+    else:
+        # Handle other types by converting to string representation
+        return str(obj)
+
+
+def serialize_list(items):
+    """Safely serialize a list of objects"""
+    if not items:
+        return []
+
+    serialized = []
+    for item in items:
+        serialized.append(serialize_object(item))
+    return serialized
 
 
 @app.route('/health', methods=['GET'])
@@ -114,12 +138,12 @@ async def github_webhook():
             'pr_number': pr_number,
             'repository': repo_full_name,
             'review': {
-                'security_score': review_result.security_score,
-                'quality_score': review_result.quality_score,
-                'approval': review_result.approval,
-                'confidence': review_result.ai_confidence,
-                'vulnerabilities_count': len(review_result.vulnerabilities),
-                'issues_count': len(review_result.issues)
+                'security_score': getattr(review_result, 'security_score', 0),
+                'quality_score': getattr(review_result, 'quality_score', 0),
+                'approval': getattr(review_result, 'approval', 'UNKNOWN'),
+                'confidence': getattr(review_result, 'ai_confidence', 0.0),
+                'vulnerabilities_count': len(getattr(review_result, 'vulnerabilities', [])),
+                'issues_count': len(getattr(review_result, 'issues', []))
             },
             'markdown_report': markdown_report,
             'timestamp': datetime.utcnow().isoformat()
@@ -162,17 +186,33 @@ async def manual_review():
             'html_url': data.get('pr_url', '#')
         })
 
+        # Safely serialize the review result
+        try:
+            vulnerabilities = serialize_list(getattr(review_result, 'vulnerabilities', []))
+            issues = serialize_list(getattr(review_result, 'issues', []))
+            recommendations = getattr(review_result, 'recommendations', [])
+
+            # Ensure recommendations is a list
+            if not isinstance(recommendations, list):
+                recommendations = [str(recommendations)] if recommendations else []
+
+        except Exception as serialize_error:
+            logger.warning(f"Error serializing review data: {serialize_error}")
+            vulnerabilities = []
+            issues = []
+            recommendations = []
+
         return jsonify({
             'success': True,
             'review': {
-                'security_score': review_result.security_score,
-                'quality_score': review_result.quality_score,
-                'approval': review_result.approval,
-                'confidence': review_result.ai_confidence,
-                'summary': review_result.summary,
-                'vulnerabilities': [vars(v) for v in review_result.vulnerabilities],
-                'issues': [vars(i) for i in review_result.issues],
-                'recommendations': review_result.recommendations
+                'security_score': getattr(review_result, 'security_score', 0),
+                'quality_score': getattr(review_result, 'quality_score', 0),
+                'approval': getattr(review_result, 'approval', 'UNKNOWN'),
+                'confidence': getattr(review_result, 'ai_confidence', 0.0),
+                'summary': getattr(review_result, 'summary', ''),
+                'vulnerabilities': vulnerabilities,
+                'issues': issues,
+                'recommendations': recommendations
             },
             'markdown_report': markdown_report,
             'timestamp': datetime.utcnow().isoformat()
@@ -208,94 +248,117 @@ async def get_pr_files(repository, pr_number):
 
 def generate_markdown_report(review_result, pr_data):
     """Generate markdown report from review result"""
-    report_lines = [
-        f"# 🤖 AI Code Review Report",
-        f"",
-        f"**PR:** {pr_data.get('title', 'N/A')} (#{pr_data.get('number', 'N/A')})",
-        f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
-        f"**AI Confidence:** {review_result.ai_confidence:.1%}",
-        f"",
-        f"## 📊 Scores",
-        f"",
-        f"| Metric | Score | Status |",
-        f"|--------|-------|--------|",
-        f"| Security | {review_result.security_score}/100 | {get_score_emoji(review_result.security_score)} |",
-        f"| Quality | {review_result.quality_score}/100 | {get_score_emoji(review_result.quality_score)} |",
-        f"",
-        f"## 🎯 Recommendation: **{review_result.approval}**",
-        f"",
-    ]
+    try:
+        # Safely get attributes with defaults
+        security_score = getattr(review_result, 'security_score', 0)
+        quality_score = getattr(review_result, 'quality_score', 0)
+        approval = getattr(review_result, 'approval', 'UNKNOWN')
+        ai_confidence = getattr(review_result, 'ai_confidence', 0.0)
+        summary = getattr(review_result, 'summary', '')
+        vulnerabilities = getattr(review_result, 'vulnerabilities', [])
+        issues = getattr(review_result, 'issues', [])
+        recommendations = getattr(review_result, 'recommendations', [])
 
-    # Add summary
-    if review_result.summary:
-        report_lines.extend([
-            f"## 📝 Summary",
+        report_lines = [
+            f"# 🤖 AI Code Review Report",
             f"",
-            f"{review_result.summary}",
+            f"**PR:** {pr_data.get('title', 'N/A')} (#{pr_data.get('number', 'N/A')})",
+            f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
+            f"**AI Confidence:** {ai_confidence:.1%}",
             f"",
-        ])
+            f"## 📊 Scores",
+            f"",
+            f"| Metric | Score | Status |",
+            f"|--------|-------|--------|",
+            f"| Security | {security_score}/100 | {get_score_emoji(security_score)} |",
+            f"| Quality | {quality_score}/100 | {get_score_emoji(quality_score)} |",
+            f"",
+            f"## 🎯 Recommendation: **{approval}**",
+            f"",
+        ]
 
-    # Add vulnerabilities
-    if review_result.vulnerabilities:
-        report_lines.extend([
-            f"## 🚨 Security Vulnerabilities ({len(review_result.vulnerabilities)})",
-            f"",
-        ])
-
-        for i, vuln in enumerate(review_result.vulnerabilities, 1):
-            severity_emoji = get_severity_emoji(vuln.get('severity', 'MEDIUM'))
+        # Add summary
+        if summary:
             report_lines.extend([
-                f"### {severity_emoji} {i}. {vuln.get('type', 'Unknown').replace('_', ' ').title()}",
+                f"## 📝 Summary",
                 f"",
-                f"**File:** `{vuln.get('file', 'N/A')}`",
-                f"**Severity:** {vuln.get('severity', 'MEDIUM')}",
-                f"",
-                f"**Description:** {vuln.get('description', 'No description provided')}",
-                f"",
-                f"**Recommendation:** {vuln.get('recommendation', 'No recommendation provided')}",
+                f"{summary}",
                 f"",
             ])
 
-    # Add issues
-    if review_result.issues:
-        report_lines.extend([
-            f"## ⚠️ Code Quality Issues ({len(review_result.issues)})",
-            f"",
-        ])
-
-        for i, issue in enumerate(review_result.issues, 1):
-            severity_emoji = get_severity_emoji(issue.get('severity', 'MEDIUM'))
+        # Add vulnerabilities
+        if vulnerabilities:
             report_lines.extend([
-                f"### {severity_emoji} {i}. {issue.get('type', 'Unknown').replace('_', ' ').title()}",
-                f"",
-                f"**File:** `{issue.get('file', 'N/A')}`",
-                f"**Severity:** {issue.get('severity', 'MEDIUM')}",
-                f"",
-                f"**Description:** {issue.get('description', 'No description provided')}",
-                f"",
-                f"**Recommendation:** {issue.get('recommendation', 'No recommendation provided')}",
+                f"## 🚨 Security Vulnerabilities ({len(vulnerabilities)})",
                 f"",
             ])
 
-    # Add recommendations
-    if review_result.recommendations:
+            for i, vuln in enumerate(vulnerabilities, 1):
+                # Handle both object and dict formats
+                vuln_dict = serialize_object(vuln)
+                severity_emoji = get_severity_emoji(vuln_dict.get('severity', 'MEDIUM'))
+                report_lines.extend([
+                    f"### {severity_emoji} {i}. {vuln_dict.get('type', 'Unknown').replace('_', ' ').title()}",
+                    f"",
+                    f"**File:** `{vuln_dict.get('file', 'N/A')}`",
+                    f"**Severity:** {vuln_dict.get('severity', 'MEDIUM')}",
+                    f"",
+                    f"**Description:** {vuln_dict.get('description', 'No description provided')}",
+                    f"",
+                    f"**Recommendation:** {vuln_dict.get('recommendation', 'No recommendation provided')}",
+                    f"",
+                ])
+
+        # Add issues
+        if issues:
+            report_lines.extend([
+                f"## ⚠️ Code Quality Issues ({len(issues)})",
+                f"",
+            ])
+
+            for i, issue in enumerate(issues, 1):
+                # Handle both object and dict formats
+                issue_dict = serialize_object(issue)
+                severity_emoji = get_severity_emoji(issue_dict.get('severity', 'MEDIUM'))
+                report_lines.extend([
+                    f"### {severity_emoji} {i}. {issue_dict.get('type', 'Unknown').replace('_', ' ').title()}",
+                    f"",
+                    f"**File:** `{issue_dict.get('file', 'N/A')}`",
+                    f"**Severity:** {issue_dict.get('severity', 'MEDIUM')}",
+                    f"",
+                    f"**Description:** {issue_dict.get('description', 'No description provided')}",
+                    f"",
+                    f"**Recommendation:** {issue_dict.get('recommendation', 'No recommendation provided')}",
+                    f"",
+                ])
+
+        # Add recommendations
+        if recommendations:
+            report_lines.extend([
+                f"## 💡 Recommendations",
+                f"",
+            ])
+
+            # Handle both list and single item cases
+            if isinstance(recommendations, list):
+                for i, rec in enumerate(recommendations, 1):
+                    report_lines.append(f"{i}. {rec}")
+            else:
+                report_lines.append(f"1. {recommendations}")
+
+            report_lines.append("")
+
+        # Add footer
         report_lines.extend([
-            f"## 💡 Recommendations",
-            f"",
+            f"---",
+            f"*Generated by AI Code Reviewer v1.0*"
         ])
 
-        for i, rec in enumerate(review_result.recommendations, 1):
-            report_lines.append(f"{i}. {rec}")
+        return "\n".join(report_lines)
 
-        report_lines.append("")
-
-    # Add footer
-    report_lines.extend([
-        f"---",
-        f"*Generated by AI Code Reviewer v1.0*"
-    ])
-
-    return "\n".join(report_lines)
+    except Exception as e:
+        logger.error(f"Error generating markdown report: {e}")
+        return f"# 🤖 AI Code Review Report\n\nError generating report: {str(e)}"
 
 
 def get_score_emoji(score):
